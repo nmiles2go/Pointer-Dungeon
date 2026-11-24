@@ -5,6 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PERCENT_SCALE      100   /* rand() % 100 gives a 0-99 roll */
+#define WALL_CHANCE_PCT     12   /* % of interior cells that become walls */
+#define START_SAFE_DIST      5   /* keep x + y below this free of random walls */
+#define TOTAL_GEMS           6   /* Total gems in the game */
+
 typedef struct Game Game;
 typedef struct Entity Entity;
 
@@ -53,6 +58,27 @@ static char *cell_at(Game *game, int x, int y)
 {
     return game->map + (ptrdiff_t)y * game->width + x;
 }
+
+    
+
+/* PTR LESSON 3: out-parameters. We can't return two ints, so the caller
+ * passes the addresses of its variables and we write through them. */
+static void find_random_empty_cell(Game *game, const char *reachable, int min_x_plus_y, int *out_x, int *out_y)
+{
+    int candidate_x, candidate_y;
+    do 
+    {
+        candidate_x = 1 + rand() % (game->width - 2);
+        candidate_y = 1 + rand() % (game->height - 2);
+
+    } while (*cell_at(game, candidate_x, candidate_y) != '.' 
+            || *(reachable + (ptrdiff_t)candidate_y * game->width + candidate_x) == 0
+            || candidate_x + candidate_y < min_x_plus_y);
+    
+    *out_x = candidate_x;
+    *out_y = candidate_y;
+}
+
 /* ---- World generation ---- */
 
 static void generate_world(Game *game)
@@ -68,12 +94,51 @@ static void generate_world(Game *game)
         int16_t y = (int)(offset / game->width);
 
         bool is_border = x == 0 || y == 0 || x == game->width - 1 || y == game->height - 1;
-        bool is_near_start = x + y < 5;
+        bool is_near_start = x + y < START_SAFE_DIST;
 
-        *cell_ptr = (is_border || (!is_near_start && rand() % 100 < 12)) ? '#' : '.';
+        *cell_ptr = (is_border || (!is_near_start && rand() % PERCENT_SCALE < WALL_CHANCE_PCT)) ? '#' : '.';
+    }
         
+    // 
+    char *reachable = calloc((size_t)(cell_count), sizeof(char *));
+    
+    if(!reachable) exit(EXIT_FAILURE);
+
+    *(reachable + game->width + 1) = 1; // reachable[game->width + 1] = 1
+
+    bool changed = true;
+    do {
+        changed = false;
+        for (int16_t y = 1; y < game->height - 1; y++)  /* y = [1, game->height - 1) */
+        {
+            for (int16_t x = 1; x < game->width - 1; x++) /* x = [1, game->width - 1) */
+            {
+                int16_t cell_index = y * game->width + x;
+
+                if (*(reachable + cell_index) || *(game->map + cell_index) == '#') continue;
+
+                bool next_to_reachable = *(reachable + cell_index - 1) || *(reachable + cell_index + 1) ||
+                                            *(reachable + cell_index - game->width) || *(reachable + cell_index + game->width);
+                                    
+                if (next_to_reachable) {
+                    *(reachable + cell_index) = 1;
+                    changed = true;
+                }
+            }
+        }
+    } while (changed);
+
+    game->gems_remaining = TOTAL_GEMS;
+    for (int gem_number = 0; gem_number < game->gems_remaining; gem_number++) 
+    {
+        int gem_x, gem_y;
+        
+        find_random_empty_cell(game, reachable, 0, &gem_x, &gem_y);
+        
+        *cell_at(game, gem_x, gem_y) = '$';
     }
 
+    free(reachable);
 
 }
 
