@@ -66,21 +66,36 @@ static char *cell_at(Game *game, int x, int y)
 static void find_random_empty_cell(Game *game, const char *reachable, int min_x_plus_y, int *out_x, int *out_y)
 {
     int candidate_x, candidate_y;
+    
     do 
     {
         candidate_x = 1 + rand() % (game->width - 2);
         candidate_y = 1 + rand() % (game->height - 2);
 
-    } while (*cell_at(game, candidate_x, candidate_y) != '.' 
-            || *(reachable + (ptrdiff_t)candidate_y * game->width + candidate_x) == 0
-            || candidate_x + candidate_y < min_x_plus_y);
+    } while (*cell_at(game, candidate_x, candidate_y) != '.' || 
+             *(reachable + (ptrdiff_t)candidate_y * game->width + candidate_x) == 0 || 
+              candidate_x + candidate_y < min_x_plus_y);
     
     *out_x = candidate_x;
     *out_y = candidate_y;
 }
 
-/* ---- World generation ---- */
+/* PTR LESSON 4: pointer to the head pointer (Entity **).
+ * We modify the caller's `list_head` variable itself, so we need its address. */
+static Entity *spawn_entity(Entity **list_head, int x, int y, char symbol, AIFn ai_behavior)
+{
+    Entity *new_entity = malloc(sizeof *new_entity);
+    
+    if (!new_entity) exit(1);
+    
+    *new_entity = (Entity){ x, y, symbol, ai_behavior, NULL };
+    new_entity->next = *list_head;   /* new node points at old first node */
+    *list_head = new_entity;         /* head now points at new node */
+    
+    return new_entity;
 
+}
+// World Generation
 static void generate_world(Game *game)
 {
     size_t cell_count = (size_t)game->height * game->width;
@@ -90,12 +105,14 @@ static void generate_world(Game *game)
         // loop goes from cell 1 to cell height *  width
 
         ptrdiff_t offset = cell_ptr - game->map;   /* pointer - pointer = element count */
-        int16_t x = (int)(offset % game->width);
-        int16_t y = (int)(offset / game->width);
+        int16_t x = offset % game->width;
+        int16_t y = offset / game->width;
 
         bool is_border = x == 0 || y == 0 || x == game->width - 1 || y == game->height - 1;
         bool is_near_start = x + y < START_SAFE_DIST;
 
+        /* Placing walls and floor appropriately.
+        The rules are that if the cell is a border put a '#' and if it a florr*/
         *cell_ptr = (is_border || (!is_near_start && rand() % PERCENT_SCALE < WALL_CHANCE_PCT)) ? '#' : '.';
     }
         
@@ -117,10 +134,13 @@ static void generate_world(Game *game)
 
                 if (*(reachable + cell_index) || *(game->map + cell_index) == '#') continue;
 
-                bool next_to_reachable = *(reachable + cell_index - 1) || *(reachable + cell_index + 1) ||
-                                            *(reachable + cell_index - game->width) || *(reachable + cell_index + game->width);
+                bool next_to_reachable = *(reachable + cell_index - 1) || 
+                                         *(reachable + cell_index + 1) ||
+                                         *(reachable + cell_index - game->width) || 
+                                         *(reachable + cell_index + game->width);
                                     
-                if (next_to_reachable) {
+                if (next_to_reachable) 
+                {
                     *(reachable + cell_index) = 1;
                     changed = true;
                 }
@@ -150,6 +170,10 @@ int main(void)
 
     printf("Size of Game Structure: %zu\n", sizeof(Game));
     printf("Size of Entity Structure: %zu\n", sizeof(Entity));
+    printf("Size of ptrdiff_t: %zu\n", sizeof(ptrdiff_t));
+    printf("Size of size_t: %zu\n", sizeof(size_t));
+
+    
     
 
     Game game_state = { 0 };
@@ -161,6 +185,10 @@ int main(void)
     if (!game->map) return 1;
 
     generate_world(game);
+
+    Entity *standalone_list_head = NULL;
+
+    game->player = spawn_entity(&standalone_list_head, 1, 1, '@', NULL);
 
     
     return 0;
