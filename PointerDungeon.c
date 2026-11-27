@@ -8,7 +8,10 @@
 #define PERCENT_SCALE      100   /* rand() % 100 gives a 0-99 roll */
 #define WALL_CHANCE_PCT     12   /* % of interior cells that become walls */
 #define START_SAFE_DIST      5   /* keep x + y below this free of random walls */
-#define TOTAL_GEMS           6   /* Total gems in the game */
+#define TOTAL_GEMS           6   /* Total gems in the game. */
+#define NUM_ENEMIES          3   
+#define NUM_DIRECTIONS       4   /* UP, DOWN, RIGHT, LEFT. No Diagonal movement. */
+#define MIN_CHASE_DISTANCE   4   /* Minimum distance the player should be from the Protector for the chase to start. */
 
 typedef struct Game Game;
 typedef struct Entity Entity;
@@ -54,25 +57,87 @@ struct Game {
 /* PTR LESSON 2: 2D -> 1D with pointer arithmetic.
  * `map + y*width + x` is a char* pointing at cell (x,y). Adding an int to a
  * pointer moves by that many ELEMENTS (here 1 byte each), not bytes. */
-static char *cell_at(Game *game, int x, int y)
+static char *cell_at(Game *game, int16_t x, int16_t y)
 {
     return game->map + (ptrdiff_t)y * game->width + x;
 }
 
+static int16_t sign_of(int16_t value) 
+{ 
+    return (value > 0) - (value < 0); 
+}
+
+/* Moving Entities and checking whether the movement is valid.*/
+static bool try_move(Game *game, Entity *mover, int16_t delta_x, int16_t delta_y)
+{
+    int16_t new_x = delta_x + mover->x;
+    int16_t new_y = delta_y + mover->y;
+
+    if(*cell_at(game, new_x, new_y) == '#') return false;
+
+    if(mover != game->player && new_x == game->player->x && new_y == game->player->y)
+    {
+        --game->health;
+        return false;
+    }
+
+    mover->x = new_x;
+    mover->y = new_y;
+
+    return true;
+}
+
+static void ai_chase(Game *game, Entity *self)
+{
+    int16_t delta_x = sign_of(game->player->x - self->x);
+    int16_t delta_y = sign_of(game->player->y - self->y);
+
+    bool needs_horizontal = delta_x != 0;
+    bool needs_vertical   = delta_y != 0;
+
+    if (needs_horizontal && try_move(game, self, delta_x, 0)) return;
+
+    if (needs_vertical)
+    {
+        try_move(game, self, 0, delta_y);
+    } 
+}
+
+static void ai_wander(Game *game, Entity *self)
+{
+    int16_t direction = rand() % NUM_DIRECTIONS;
     
+    int16_t delta_x = (direction == 0) - (direction == 1);
+    int16_t delta_y = (direction == 2) - (direction == 3);
+
+    try_move(game, self, delta_x, delta_y);
+}
+
+static void ai_protect(Game *game, Entity *self)
+{
+    int16_t distance = abs(game->player->x - self->x) + abs(game->player->y - self->y);
+    
+    if(distance < MIN_CHASE_DISTANCE)
+    {
+        ai_chase(game, self);
+    }
+}
+
+
+
 
 /* PTR LESSON 3: out-parameters. We can't return two ints, so the caller
  * passes the addresses of its variables and we write through them. */
-static void find_random_empty_cell(Game *game, const char *reachable, int min_x_plus_y, int *out_x, int *out_y)
+static void find_random_empty_cell(Game *game, const char *reachable, int16_t min_x_plus_y, int16_t *out_x, int16_t *out_y)
 {
-    int candidate_x, candidate_y;
+    int16_t candidate_x, candidate_y;
     
     do 
     {
         candidate_x = 1 + rand() % (game->width - 2);
         candidate_y = 1 + rand() % (game->height - 2);
 
-    } while (*cell_at(game, candidate_x, candidate_y) != '.' || 
+    } while (*cell_at(game, candidate_x, candidate_y) != '.'                        || 
              *(reachable + (ptrdiff_t)candidate_y * game->width + candidate_x) == 0 || 
               candidate_x + candidate_y < min_x_plus_y);
     
@@ -82,15 +147,15 @@ static void find_random_empty_cell(Game *game, const char *reachable, int min_x_
 
 /* PTR LESSON 4: pointer to the head pointer (Entity **).
  * We modify the caller's `list_head` variable itself, so we need its address. */
-static Entity *spawn_entity(Entity **list_head, int x, int y, char symbol, AIFn ai_behavior)
+static Entity *spawn_entity(Entity **list_head, int16_t x, int16_t y, char symbol, AIFn ai_behavior)
 {
     Entity *new_entity = malloc(sizeof *new_entity);
     
     if (!new_entity) exit(1);
     
     *new_entity = (Entity){ x, y, symbol, ai_behavior, NULL };
-    new_entity->next = *list_head;   /* new node points at old first node */
-    *list_head = new_entity;         /* head now points at new node */
+    new_entity->next = *list_head; 
+    *list_head = new_entity;        
     
     return new_entity;
 
@@ -149,9 +214,9 @@ static void generate_world(Game *game)
     } while (changed);
 
     game->gems_remaining = TOTAL_GEMS;
-    for (int gem_number = 0; gem_number < game->gems_remaining; gem_number++) 
+    for (int16_t gem_number = 0; gem_number < game->gems_remaining; gem_number++) 
     {
-        int gem_x, gem_y;
+        int16_t gem_x, gem_y;
         
         find_random_empty_cell(game, reachable, 0, &gem_x, &gem_y);
         
@@ -189,6 +254,21 @@ int main(void)
     Entity *standalone_list_head = NULL;
 
     game->player = spawn_entity(&standalone_list_head, 1, 1, '@', NULL);
+
+    /* PTR LESSON 8: a "table of function pointers" walked with pointer math.
+     * We use a heap block instead of a [] array to keep our no-[] promise. */
+
+    AIFn *ai_table = malloc(NUM_ENEMIES * sizeof *ai_table);
+
+    char *symbol = malloc(NUM_ENEMIES * sizeof(char));
+
+    /* Filling up the AI behavior and Symbol Arrays.*/
+    *(ai_table + 0) = ai_chase; *(symbol + 0) = 'C';
+    *(ai_table + 1) = ai_wander; *(symbol + 1) = 'W';
+    *(ai_table + 1) = ai_protect; *(symbol + 1) = 'P';
+
+
+
 
     
     return 0;
